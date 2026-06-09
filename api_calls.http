@@ -1,0 +1,128 @@
+@api_key = API_gmf2zoNf_Mz17JWhtIDCMeHVKD9So5xb3aX0bmg3C
+@business_id = a797533a-f116-46f8-84be-d007675cc04e
+@customer_id = 8a08bceb-9a66-41a1-b2fa-36c6cc9d4713
+@invoice_id = 6492ac57-a04f-4d99-8495-2849e4a7a2a2
+
+### POST request to register a business
+# curl -i -X POST localhost:8080/business -H "Content-Type: application/json" -d '{"name":"sagathiya", "email":"info@sagathiya.in"}'
+POST localhost:8080/business
+Content-Type: application/json
+
+{
+  "name": "sagathiya",
+  "email": "info@sagathiya.in"
+}
+
+### POST request to create a customer for a business without authentication
+
+# curl -i -X POST localhost:8080/customer -H "Content-Type: application/json" -d '{"name":"axay", "email":"axay@gmail.com"}'
+POST localhost:8080/customer
+Content-Type: application/json
+
+{
+  "name": "axay",
+  "email": "axay@gmail.com"
+}
+
+### POST request to create a customer for a business with authentication
+
+POST localhost:8080/customer
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "name": "axay",
+  "email": "axay@gmail.com"
+}
+
+### GET request to fetch customers for a business with authentication
+# curl -i -X GET localhost:8080/customers -H "Authorization: Bearer API_emFTuxKZ_nSoVSQlUClJR1jXRsqhe5co5hlMV0JpC"
+GET localhost:8080/customers
+Authorization: Bearer {{api_key}}
+
+### GET request to fetch a specific customer for a business with authentication
+# curl -i -X GET localhost:8080/customers/e05991e5-9634-401d-9361-a0bdc37c8fc5 -H "Authorization: Bearer API_emFTuxKZ_nSoVSQlUClJR1jXRsqhe5co5hlMV0JpC"
+GET localhost:8080/customers/{{customer_id}}
+Authorization: Bearer {{api_key}}
+
+### create an invoice for a customer with authentication
+# curl -i -X POST localhost:8080/invoice -H "Content-Type: application/json" -H "Authorization: Bearer API_emFTuxKZ_nSoVSQlUClJR1jXRsqhe5co5hlMV0JpC" -d '{"customer_id":"e05991e5-9634-401d-9361-a0bdc37c8fc5", "items":[{"description":"monitor", "quantity":1, "unit_amount_cents":1000}, {"description":"keyboard", "quantity":2, "unit_amount_cents":500}]}'
+POST localhost:8080/invoice
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "customer_id": "{{customer_id}}",
+  "items": [
+    {
+      "description": "p1",
+      "quantity": 3,
+      "unit_amount_cents": 300
+    },
+    {
+      "description": "p2",
+      "quantity": 2,
+      "unit_amount_cents": 600
+    }
+  ]
+}
+
+
+
+### GET request to fetch a specific invoice with authentication
+GET localhost:8080/invoice/{{invoice_id}}
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+### GET request to invoices with a status filter for a business with authentication
+GET localhost:8080/invoices?status=open
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+### GET request to  fetch all the invoices for a business with authentication
+GET localhost:8080/invoices
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+###
+POST localhost:8080/invoices/{{invoice_id}}/pay
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "card_token": "tok_network_error",
+  "idempotency_key": "unique_key_126"
+}
+
+###
+# curl -i -X POST localhost:8080/invoices/{{invoice_id}}/pay -H "Content-Type: application/json" -d '{"card_token": "tok_timeout", "idempotency_key": "unique_key_128"}'
+POST localhost:8080/invoices/{{invoice_id}}/pay
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "card_token": "tok_timeout",
+  "idempotency_key": "unique_key_128"
+}
+
+###
+# curl -i -X POST localhost:8080/invoices/{{invoice_id}}/pay -H "Content-Type: application/json" -d '{"card_token": "tok_card_declined", "idempotency_key": "unique_key_128"}'
+
+POST localhost:8080/invoices/{{invoice_id}}/pay
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "card_token": "tok_card_declined",
+  "idempotency_key": "unique_key_127"
+}
+
+###
+# curl -i -X POST localhost:8080/invoices/{{invoice_id}}/pay -H "Content-Type: application/json" -d '{"card_token": "tok_success", "idempotency_key": "unique_key_128"}'
+POST localhost:8080/invoices/{{invoice_id}}/pay
+Content-Type: application/json
+
+{
+  "card_token": "tok_success",
+  "idempotency_key": "unique_key_128"
+}
