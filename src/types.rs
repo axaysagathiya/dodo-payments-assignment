@@ -6,15 +6,19 @@ use std::fmt;
 #[sqlx(type_name = "text", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum InvoiceState {
+    Draft,
     Open,
     Paid,
+    Cancelled,
 }
 
 impl fmt::Display for InvoiceState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
+            Self::Draft => "draft",
             Self::Open => "open",
             Self::Paid => "paid",
+            Self::Cancelled => "cancelled",
         };
         write!(f, "{}", s)
     }
@@ -47,7 +51,7 @@ impl fmt::Display for PaymentStatus {
 pub enum PspResponseStatus {
     Succeeded,
     Failed,
-	Unknown,
+    Unknown,
     Error,
 }
 

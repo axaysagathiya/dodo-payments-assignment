@@ -1,8 +1,8 @@
-mod db;
 mod auth;
+mod db;
 mod error;
-mod types;
 mod handlers;
+mod types;
 
 use axum::routing::{get, post};
 use dotenvy::dotenv;
@@ -29,7 +29,9 @@ async fn main() {
     info!("Starting Invoice Payment System...");
 
     // Initialize database connection pool
-    let pool = db::init_pool().await.expect("Failed to initialize database pool");
+    let pool = db::init_pool()
+        .await
+        .expect("Failed to initialize database pool");
 
     let state = AppState { db: pool };
 
@@ -44,8 +46,6 @@ async fn main() {
         .route("/invoice", post(handlers::create_invoice))
         .route("/invoices", get(handlers::list_invoices))
         .route("/invoice/{id}", get(handlers::get_invoice));
-        
-
 
     let app = axum::Router::new()
         .merge(public_routes)
@@ -58,5 +58,7 @@ async fn main() {
         .expect("Failed to start server");
 
     info!("Server is listening on {}", address);
-    axum::serve(listener, app).await.expect("Failed to run server");
+    axum::serve(listener, app)
+        .await
+        .expect("Failed to run server");
 }

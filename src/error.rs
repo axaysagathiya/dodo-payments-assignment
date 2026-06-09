@@ -1,9 +1,9 @@
 #![allow(unused)]
 
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Serialize;
 use std::fmt;
@@ -39,7 +39,7 @@ impl AppError {
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::new(StatusCode::CONFLICT, "CONFLICT", message)
     }
-    
+
     /// Unauthorized error
     pub fn unauthorized(message: impl Into<String>) -> Self {
         Self::new(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", message)
@@ -57,11 +57,7 @@ impl AppError {
 
     /// Database error
     pub fn database(message: impl Into<String>) -> Self {
-        Self::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "DATABASE_ERROR",
-            message,
-        )
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", message)
     }
 
     /// Not found error
@@ -72,11 +68,7 @@ impl AppError {
 
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}: {}",
-            self.code, self.message
-        )
+        write!(f, "{}: {}", self.code, self.message)
     }
 }
 

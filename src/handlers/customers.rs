@@ -1,5 +1,6 @@
 use axum::extract::{Json, Path, State};
 use serde::{Deserialize, Serialize};
+use tracing::info;
 use uuid::Uuid;
 
 use crate::AppState;
@@ -32,6 +33,11 @@ pub async fn create_customer(
 ) -> Result<Json<CreateCustomerResponse>, AppError> {
     let customer_id = Uuid::new_v4();
 
+    info!(
+        "Business {} creating customer: {} ({})",
+        auth.business_id, payload.name, payload.email
+    );
+
     sqlx::query(r#"INSERT INTO customers (id, business_id, name, email) VALUES ($1, $2, $3, $4)"#)
         .bind(customer_id)
         .bind(auth.business_id)
@@ -39,7 +45,19 @@ pub async fn create_customer(
         .bind(&payload.email)
         .execute(&state.db)
         .await
-        .map_err(|e| AppError::database("Failed to create customer").with_details(e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to create customer for business {}: {}",
+                auth.business_id,
+                e
+            );
+            AppError::database("Failed to create customer").with_details(e.to_string())
+        })?;
+
+    info!(
+        "Customer {} created successfully for business {}",
+        customer_id, auth.business_id
+    );
 
     Ok(Json(CreateCustomerResponse { customer_id }))
 }
@@ -49,6 +67,8 @@ pub async fn fetch_all_customers(
     State(state): State<AppState>,
     auth: AuthenticatedBusiness,
 ) -> Result<Json<Vec<Customer>>, AppError> {
+    info!("Fetching all customers for business {}", auth.business_id);
+
     let customers = sqlx::query_as!(
         Customer,
         r#"
@@ -60,7 +80,20 @@ pub async fn fetch_all_customers(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::database("Failed to fetch customers").with_details(e.to_string()))?;
+    .map_err(|e| {
+        tracing::error!(
+            "Failed to fetch customers for business {}: {}",
+            auth.business_id,
+            e
+        );
+        AppError::database("Failed to fetch customers").with_details(e.to_string())
+    })?;
+
+    info!(
+        "Found {} customers for business {}",
+        customers.len(),
+        auth.business_id
+    );
 
     Ok(Json(customers))
 }
@@ -70,6 +103,11 @@ pub async fn get_customer(
     auth: AuthenticatedBusiness,
     Path(customer_id): Path<Uuid>,
 ) -> Result<Json<Customer>, AppError> {
+    info!(
+        "Business {} fetching customer details: {}",
+        auth.business_id, customer_id
+    );
+
     let customer = sqlx::query_as!(
         Customer,
         r#"
@@ -82,8 +120,24 @@ pub async fn get_customer(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::database("Failed to fetch customer").with_details(e.to_string()))?
-    .ok_or_else(|| AppError::not_found("Customer not found"))?;
+    .map_err(|e| {
+        tracing::error!(
+            "Error fetching customer {} for business {}: {}",
+            customer_id,
+            auth.business_id,
+            e
+        );
+        AppError::database("Failed to fetch customer").with_details(e.to_string())
+    })?
+    .ok_or_else(|| {
+        warn!(
+            "Customer {} not found for business {}",
+            customer_id, auth.business_id
+        );
+        AppError::not_found("Customer not found")
+    })?;
 
     Ok(Json(customer))
 }
+
+use tracing::warn;

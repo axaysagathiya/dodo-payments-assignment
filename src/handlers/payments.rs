@@ -1,13 +1,15 @@
+use axum::extract::{Json, Path, State};
+use axum::http::StatusCode;
+use blake3::Hasher;
+use reqwest::StatusCode as ReqwestStatusCode;
+use serde::{Deserialize, Serialize};
+use sqlx::types::chrono::Utc;
 use std::string::String;
 use std::time::Duration;
-use axum::extract::{State, Json, Path};
-use axum::http::StatusCode;
-use serde::{Deserialize, Serialize};
+use tracing::{error, info, warn};
 use uuid::Uuid;
-use reqwest::StatusCode as ReqwestStatusCode;
-use sqlx::types::chrono::Utc;
-use blake3::Hasher;
-use crate::{AppState};
+
+use crate::AppState;
 use crate::error::AppError;
 use crate::types::{InvoiceState, PaymentStatus, PspResponseStatus, PspToken};
 
@@ -43,11 +45,21 @@ pub async fn pay_invoice(
     Path(invoice_id): Path<Uuid>,
     Json(payload): Json<PaymentRequest>,
 ) -> Result<Json<PaymentResponse>, AppError> {
-    // 1. Start a transaction
-    let mut tx = state.db.begin().await
-        .map_err(|e| AppError::database("Failed to start transaction").with_details(e.to_string()))?;
+    info!(
+        "Processing payment for invoice {} (idempotency: {})",
+        invoice_id, payload.idempotency_key
+    );
 
-    // 2. Lock the invoice row for update to synchronize concurrent requests for the same invoice.
+    // 1. Start a transaction
+    let mut tx = state.db.begin().await.map_err(|e| {
+        error!(
+            "Failed to start transaction for invoice {}: {}",
+            invoice_id, e
+        );
+        AppError::database("Failed to start transaction").with_details(e.to_string())
+    })?;
+
+    // 2. Lock the invoice row
     let invoice = sqlx::query!(
         r#"
         SELECT total_amount_cents, state as "state: InvoiceState"
@@ -59,10 +71,17 @@ pub async fn pay_invoice(
     )
     .fetch_optional(&mut *tx)
     .await
-    .map_err(|e| AppError::database("Failed to fetch invoice with lock").with_details(e.to_string()))?
-    .ok_or_else(|| AppError::not_found("Invoice not found"))?;
+    .map_err(|e| {
+        error!("Failed to fetch invoice {} with lock: {}", invoice_id, e);
+        AppError::database("Failed to fetch invoice with lock").with_details(e.to_string())
+    })?
+    .ok_or_else(|| {
+        warn!("Invoice {} not found during payment attempt", invoice_id);
+        AppError::not_found("Invoice not found")
+    })?;
 
     if invoice.state == InvoiceState::Paid {
+        warn!("Payment attempted for already paid invoice {}", invoice_id);
         return Err(AppError::bad_request("Invoice is already paid"));
     }
 
@@ -77,24 +96,34 @@ pub async fn pay_invoice(
     )
     .fetch_all(&mut *tx)
     .await
-    .map_err(|e| AppError::database("Failed to check active attempts").with_details(e.to_string()))?;
+    .map_err(|e| {
+        error!("Failed to check active attempts for invoice {}: {}", invoice_id, e);
+        AppError::database("Failed to check active attempts").with_details(e.to_string())
+    })?;
 
     let mut hasher = Hasher::new();
-
     hasher.update(payload.card_token.as_bytes());
     let request_hash = hasher.finalize().to_hex().to_string();
 
     for attempt in active_attempts {
         if attempt.idempotency_key == payload.idempotency_key {
             if attempt.request_hash != request_hash {
-                return Err(AppError::conflict("Idempotency key reused with different request payload"));
+                warn!(
+                    "Idempotency key {} reused with different payload for invoice {}",
+                    payload.idempotency_key, invoice_id
+                );
+                return Err(AppError::conflict(
+                    "Idempotency key reused with different request payload",
+                ));
             }
         }
 
         if attempt.status == PaymentStatus::Succeeded {
-            // Invoice is already paid.
             if attempt.idempotency_key == payload.idempotency_key {
-                // Same client retrying a success - return the original record
+                info!(
+                    "Returning cached successful response for invoice {} (attempt: {})",
+                    invoice_id, attempt.id
+                );
                 return Ok(Json(PaymentResponse {
                     attempt_id: attempt.id,
                     status: attempt.status,
@@ -102,24 +131,33 @@ pub async fn pay_invoice(
                     failure_code: attempt.failure_code,
                 }));
             } else {
-                return Err(AppError::bad_request("Invoice has already been paid by someone"));
+                warn!(
+                    "Invoice {} already paid by another attempt ({}), rejecting request {}",
+                    invoice_id, attempt.id, payload.idempotency_key
+                );
+                return Err(AppError::bad_request(
+                    "Invoice has already been paid by someone",
+                ));
             }
         }
 
         if attempt.status == PaymentStatus::Processing {
-            // Check if the processing attempt is "fresh" (updated within the last 60 seconds)
             let now = Utc::now();
-            
             if attempt.updated_at + Duration::from_secs(60) > now {
-                // Another request (or this one) is currently in the 60s window
+                warn!(
+                    "Active payment attempt {} already in progress for invoice {}",
+                    attempt.id, invoice_id
+                );
                 return Err(AppError::new(
                     StatusCode::CONFLICT,
                     "PAYMENT_IN_PROGRESS",
-                    "A payment for this invoice is already being processed. Please try again in a minute."
+                    "A payment for this invoice is already being processed. Please try again in a minute.",
                 ));
             } else {
-                // The attempt is stale (> 60s). We mark it as failed so we can take over.
-                tracing::warn!("Marking stale payment attempt {} as failed to allow retry", attempt.id);
+                warn!(
+                    "Marking stale payment attempt {} as failed for invoice {}",
+                    attempt.id, invoice_id
+                );
                 sqlx::query!(
                     r#"UPDATE payment_attempts SET status = $1, updated_at = NOW() WHERE id = $2"#,
                     PaymentStatus::Failed as PaymentStatus,
@@ -127,7 +165,10 @@ pub async fn pay_invoice(
                 )
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| AppError::database("Failed to clear stale attempt").with_details(e.to_string()))?;
+                .map_err(|e| {
+                    error!("Failed to clear stale attempt {}: {}", attempt.id, e);
+                    AppError::database("Failed to clear stale attempt").with_details(e.to_string())
+                })?;
             }
         }
     }
@@ -149,12 +190,23 @@ pub async fn pay_invoice(
     )
     .execute(&mut *tx)
     .await
-    .map_err(|e| AppError::database("Failed to prepare payment attempt").with_details(e.to_string()))?;
+    .map_err(|e| {
+        error!("Failed to record processing attempt for invoice {}: {}", invoice_id, e);
+        AppError::database("Failed to prepare payment attempt").with_details(e.to_string())
+    })?;
 
-    // 5. Commit the transaction to release the row lock. 
-    // The "processing" status in the DB (plus the 60s freshness) will protect against other concurrent calls.
-    tx.commit().await
-        .map_err(|e| AppError::database("Failed to commit transaction").with_details(e.to_string()))?;
+    tx.commit().await.map_err(|e| {
+        error!(
+            "Failed to commit lock transaction for invoice {}: {}",
+            invoice_id, e
+        );
+        AppError::database("Failed to commit transaction").with_details(e.to_string())
+    })?;
+
+    info!(
+        "Requesting charge from PSP for invoice {} (amount: {})",
+        invoice_id, invoice.total_amount_cents
+    );
 
     // 6. Call Mock PSP
     let client = reqwest::Client::new();
@@ -170,25 +222,87 @@ pub async fn pay_invoice(
     let (final_status, psp_ref, fail_code, http_status) = match psp_res {
         Ok(res) => {
             let status_code = res.status();
+            info!(
+                "PSP responded with {} for invoice {}",
+                status_code, invoice_id
+            );
             let psp_data: Option<PspChargeResponse> = res.json().await.ok();
 
             match (status_code, psp_data) {
-                (ReqwestStatusCode::OK, Some(data)) if data.status == PspResponseStatus::Succeeded => {
-                    (PaymentStatus::Succeeded, data.transaction_id, None, StatusCode::OK)
+                (ReqwestStatusCode::OK, Some(data))
+                    if data.status == PspResponseStatus::Succeeded =>
+                {
+                    info!(
+                        "PSP charge succeeded for invoice {}: {}",
+                        invoice_id,
+                        data.transaction_id.as_deref().unwrap_or("no-ref")
+                    );
+                    (
+                        PaymentStatus::Succeeded,
+                        data.transaction_id,
+                        None,
+                        StatusCode::OK,
+                    )
                 }
                 (ReqwestStatusCode::PAYMENT_REQUIRED, Some(data)) => {
-                    (PaymentStatus::Failed, None, data.code, StatusCode::PAYMENT_REQUIRED)
+                    warn!(
+                        "PSP charge declined for invoice {}: {:?}",
+                        invoice_id, data.code
+                    );
+                    (
+                        PaymentStatus::Failed,
+                        None,
+                        data.code,
+                        StatusCode::PAYMENT_REQUIRED,
+                    )
                 }
                 (ReqwestStatusCode::GATEWAY_TIMEOUT, Some(data)) => {
-                    (PaymentStatus::Unknown, None, data.code, StatusCode::GATEWAY_TIMEOUT)
+                    warn!(
+                        "PSP charge timed out for invoice {}: {:?}",
+                        invoice_id, data.code
+                    );
+                    (
+                        PaymentStatus::Unknown,
+                        None,
+                        data.code,
+                        StatusCode::GATEWAY_TIMEOUT,
+                    )
                 }
                 (ReqwestStatusCode::INTERNAL_SERVER_ERROR, Some(data)) => {
-                    (PaymentStatus::Unknown, None, data.code, StatusCode::INTERNAL_SERVER_ERROR)
+                    error!(
+                        "PSP internal error for invoice {}: {:?}",
+                        invoice_id, data.code
+                    );
+                    (
+                        PaymentStatus::Unknown,
+                        None,
+                        data.code,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                    )
                 }
-                _ => (PaymentStatus::Processing, None, None, StatusCode::INTERNAL_SERVER_ERROR),
+                _ => {
+                    error!("Unknown PSP response for invoice {}", invoice_id);
+                    (
+                        PaymentStatus::Processing,
+                        None,
+                        None,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                    )
+                }
             }
         }
-        Err(_) => (PaymentStatus::Processing, None, Some("connection_error".to_string()), StatusCode::SERVICE_UNAVAILABLE),
+        Err(e) => {
+            error!(
+                "Network error calling PSP for invoice {}: {}",
+                invoice_id, e
+            );
+            (
+                PaymentStatus::Processing,
+                None,
+                Some("connection_error".to_string()),
+                StatusCode::SERVICE_UNAVAILABLE,
+            )
+        }
     };
 
     // 7. Final Update
@@ -207,9 +321,16 @@ pub async fn pay_invoice(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::database("Failed to update payment result").with_details(e.to_string()))?;
+    .map_err(|e| {
+        error!(
+            "Failed to record final PSP result for invoice {}: {}",
+            invoice_id, e
+        );
+        AppError::database("Failed to update payment result").with_details(e.to_string())
+    })?;
 
     if final_status == PaymentStatus::Succeeded {
+        info!("Finalizing invoice {} as PAID", invoice_id);
         sqlx::query!(
             r#"UPDATE invoices SET state = $1 WHERE id = $2"#,
             InvoiceState::Paid as InvoiceState,
@@ -217,7 +338,10 @@ pub async fn pay_invoice(
         )
         .execute(&state.db)
         .await
-        .map_err(|e| AppError::database("Failed to finalize invoice").with_details(e.to_string()))?;
+        .map_err(|e| {
+            error!("Failed to mark invoice {} as paid: {}", invoice_id, e);
+            AppError::database("Failed to finalize invoice").with_details(e.to_string())
+        })?;
 
         Ok(Json(PaymentResponse {
             attempt_id: updated_record.id,
@@ -226,19 +350,25 @@ pub async fn pay_invoice(
             failure_code: None,
         }))
     } else {
-        
-        let code = if final_status == PaymentStatus::Processing {
-            "PAYMENT_PROCESSING"
-        } else if final_status == PaymentStatus::Unknown {
-            "PAYMENT_STATUS_UNKNOWN"
-        } else {
-            "PAYMENT_FAILED"
+        let code = match final_status {
+            PaymentStatus::Processing => "PAYMENT_PROCESSING",
+            PaymentStatus::Unknown => "PAYMENT_STATUS_UNKNOWN",
+            _ => "PAYMENT_FAILED",
         };
+
+        warn!(
+            "Payment {} for invoice {} ended with status: {}",
+            updated_record.id, invoice_id, code
+        );
 
         Err(AppError::new(
             http_status,
             code.to_string(),
-            format!("Payment result: {} (code: {})", final_status, fail_code.unwrap_or_default())
+            format!(
+                "Payment result: {} (code: {})",
+                final_status,
+                fail_code.unwrap_or_default()
+            ),
         ))
     }
 }

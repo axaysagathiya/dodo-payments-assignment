@@ -1,8 +1,4 @@
-use blake3;
-use axum::{
-    extract::FromRequestParts,
-    http::request::Parts,
-};
+use axum::{extract::FromRequestParts, http::request::Parts};
 use rand::{Rng, distributions::Alphanumeric};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -57,12 +53,12 @@ pub async fn create_api_key(db: &PgPool, business_id: Uuid) -> Result<String, St
         r#"
         INSERT INTO api_keys (id, business_id, hashed_secret, prefix)
         VALUES ($1, $2, $3, $4)
-        "#
+        "#,
     )
-        .bind(Uuid::new_v4())
-        .bind(business_id)
-        .bind(hashed_secret)
-        .bind(api_key.prefix)
+    .bind(Uuid::new_v4())
+    .bind(business_id)
+    .bind(hashed_secret)
+    .bind(api_key.prefix)
     .execute(db)
     .await
     .map_err(|e| format!("Failed to create API key: {}", e))?;
@@ -89,7 +85,9 @@ impl FromRequestParts<AppState> for AuthenticatedBusiness {
             .ok_or_else(|| AppError::unauthorized("Missing Authorization header"))?;
 
         if !auth_header.starts_with("Bearer ") {
-            return Err(AppError::unauthorized("Invalid Authorization header format"));
+            return Err(AppError::unauthorized(
+                "Invalid Authorization header format",
+            ));
         }
 
         let raw_key = &auth_header[7..];

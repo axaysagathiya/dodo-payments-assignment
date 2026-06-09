@@ -1,12 +1,12 @@
 use axum::{
+    Router,
     extract::Json,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
-    Router,
 };
 use serde::{Deserialize, Serialize};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -56,7 +56,8 @@ async fn handle_charge(Json(payload): Json<ChargeRequest>) -> Response {
                 transaction_id: None,
                 code: Some("invalid_amount".to_string()),
             }),
-        ).into_response();
+        )
+            .into_response();
     }
 
     // 2. Token Behavior Logic
