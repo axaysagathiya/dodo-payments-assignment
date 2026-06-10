@@ -63,3 +63,7 @@ If you have [Rest Client](https://marketplace.visualstudio.com/items?itemName=hu
 
 ## Tech Stack
 Axum, tokio, PostgreSQL, serde, Blake3
+
+## Demo Video
+
+https://drive.google.com/drive/folders/1oS8gf18SNf4Y90IyYI0k521oe1W9rIlr?usp=drive_link
