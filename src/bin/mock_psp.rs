@@ -29,6 +29,11 @@ struct ChargeResponse {
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
+
+    let psp_server_url =
+        std::env::var("MOCK_PSP_SERVER_URL").unwrap_or_else(|_| "0.0.0.0:3001".to_string());
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -36,10 +41,9 @@ async fn main() {
 
     let app = Router::new().route("/charge", post(handle_charge));
 
-    let address = "0.0.0.0:3001";
-    info!("Mock PSP listening on {}", address);
+    info!("Mock PSP listening on {}", psp_server_url);
 
-    let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(psp_server_url).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 

@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: invoice_db
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d invoice_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mock-psp:
+    build:
+      context: .
+      target: mock-psp-runtime
+    ports:
+      - "3001:3001"
+    environment:
+      - RUST_LOG=info
+
+  api:
+    build:
+      context: .
+      target: api-runtime
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      mock-psp:
+        condition: service_started
+    environment:
+      - DATABASE_URL=postgres://user:password@db:5432/invoice_db
+      - MOCK_PSP_BASE_URL=http://mock-psp:3001
+      - RUST_LOG=info

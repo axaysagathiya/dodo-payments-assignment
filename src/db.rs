@@ -24,12 +24,5 @@ pub async fn init_pool() -> Result<PgPool, String> {
 
     info!("Successfully connected to the database.");
 
-    info!("Running database migrations...");
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .map_err(|e| format!("Failed to run database migrations: {}", e))?;
-    info!("Database migrations applied successfully.");
-
     Ok(pool)
 }

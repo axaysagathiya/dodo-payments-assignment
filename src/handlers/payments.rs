@@ -90,7 +90,7 @@ pub async fn pay_invoice(
         r#"
         SELECT id, status as "status: PaymentStatus", idempotency_key, psp_reference, failure_code, updated_at, request_hash
         FROM payment_attempts
-        WHERE invoice_id = $1 AND (status = 'processing' OR status = 'succeeded')
+        WHERE invoice_id = $1
         "#,
         invoice_id
     )
@@ -171,6 +171,9 @@ pub async fn pay_invoice(
                 })?;
             }
         }
+
+        // For failed or unknown attempts,
+        // we allow retries with same idempotency key, but if payload differs we reject
     }
 
     // 4. Upsert the current attempt as "processing"
@@ -209,9 +212,13 @@ pub async fn pay_invoice(
     );
 
     // 6. Call Mock PSP
+    let psp_base_url =
+        std::env::var("MOCK_PSP_BASE_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
+    let psp_charge_url = format!("{}/charge", psp_base_url.trim_end_matches('/'));
+
     let client = reqwest::Client::new();
     let psp_res = client
-        .post("http://localhost:3001/charge")
+        .post(&psp_charge_url)
         .json(&PspChargeRequest {
             amount_cents: invoice.total_amount_cents,
             card_token: payload.card_token,
