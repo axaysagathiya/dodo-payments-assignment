@@ -35,5 +35,5 @@ services:
         condition: service_started
     environment:
       - DATABASE_URL=postgres://user:password@db:5432/invoice_db
-      - MOCK_PSP_BASE_URL=http://mock-psp:3001
+      - MOCK_PSP_SERVER_URL=http://mock-psp:3001
       - RUST_LOG=info

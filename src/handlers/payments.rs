@@ -190,15 +190,22 @@ pub async fn pay_invoice(
         AppError::database("Failed to prepare payment attempt").with_details(e.to_string())
     })?;
 
-    // Row lock on 'invoices' is HELD during the PSP call.
+    tx.commit().await.map_err(|e| {
+        error!(
+            "Failed to commit lock transaction for invoice {}: {}",
+            invoice_id, e
+        );
+        AppError::database("Failed to commit transaction").with_details(e.to_string())
+    })?;
+
     info!(
         "Requesting charge from PSP for invoice {} (amount: {})",
         invoice_id, invoice.total_amount_cents
     );
 
     // 6. Call Mock PSP
-    let psp_base_url =
-        std::env::var("MOCK_PSP_BASE_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
+    let psp_base_url = std::env::var("MOCK_PSP_SERVER_URL")
+        .unwrap_or_else(|_| "http://localhost:3001".to_string());
     let psp_charge_url = format!("{}/charge", psp_base_url.trim_end_matches('/'));
 
     let client = reqwest::Client::builder()
@@ -303,7 +310,7 @@ pub async fn pay_invoice(
         }
     };
 
-    // 7. Final Update (Inside same transaction)
+    // 7. Final Update
     let updated_record = sqlx::query!(
         r#"
         UPDATE payment_attempts
@@ -317,7 +324,7 @@ pub async fn pay_invoice(
         invoice_id,
         payload.idempotency_key
     )
-    .fetch_one(&mut *tx)
+    .fetch_one(&state.db)
     .await
     .map_err(|e| {
         error!(
@@ -334,19 +341,11 @@ pub async fn pay_invoice(
             InvoiceState::Paid as InvoiceState,
             invoice_id
         )
-        .execute(&mut *tx)
+        .execute(&state.db)
         .await
         .map_err(|e| {
             error!("Failed to mark invoice {} as paid: {}", invoice_id, e);
             AppError::database("Failed to finalize invoice").with_details(e.to_string())
-        })?;
-
-        tx.commit().await.map_err(|e| {
-            error!(
-                "Failed to commit transaction for invoice {}: {}",
-                invoice_id, e
-            );
-            AppError::database("Failed to commit final transaction").with_details(e.to_string())
         })?;
 
         Ok(Json(PaymentResponse {
@@ -356,14 +355,6 @@ pub async fn pay_invoice(
             failure_code: None,
         }))
     } else {
-        tx.commit().await.map_err(|e| {
-            error!(
-                "Failed to commit failure state for invoice {}: {}",
-                invoice_id, e
-            );
-            AppError::database("Failed to commit failure transaction").with_details(e.to_string())
-        })?;
-
         let code = match final_status {
             PaymentStatus::Processing => "PAYMENT_PROCESSING",
             PaymentStatus::Unknown => "PAYMENT_STATUS_UNKNOWN",

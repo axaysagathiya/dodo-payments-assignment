@@ -1,6 +1,6 @@
-@api_key = ""
-@customer_id = ""
-@invoice_id = ""
+@api_key = 
+@customer_id = 
+@invoice_id = 
 
 ### POST request to register a business
 POST http://localhost:8080/business

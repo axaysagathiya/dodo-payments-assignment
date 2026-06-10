@@ -1,5 +1,7 @@
 FROM rust:slim-bullseye AS app-base
 
+ENV DATABASE_URL=postgres://user:password@db:5432/invoice_db
+
 WORKDIR /app
 
 RUN apt-get update \

@@ -43,8 +43,6 @@ impl TestApp {
         let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
         let pool = db::init_pool().await.expect("Failed to initialize DB pool");
 
-        let api_port = 8080;
-
         // 1. Start Mock PSP
         let psp_child = Command::new("cargo")
             .args(["run", "--bin", "mock_psp"])
@@ -59,13 +57,13 @@ impl TestApp {
             .args(["run", "--bin", "invoice-payment-system"])
             .env("DATABASE_URL", &db_url)
             .env(
-                "MOCK_PSP_BASE_URL",
+                "MOCK_PSP_SERVER_URL",
                 format!("http://127.0.0.1:{}", psp_port),
             )
             .spawn()
             .expect("Failed to start API");
         let api_guard = KillOnDrop(api_child);
-        let api_url = format!("http://127.0.0.1:{}", api_port);
+        let api_url = "http://127.0.0.1:8080".to_string();
         wait_for_url(&format!("{}/business", api_url)).await;
 
         let client = reqwest::Client::new();
