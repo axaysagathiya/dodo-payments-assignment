@@ -1,19 +1,7 @@
-mod auth;
-mod db;
-mod error;
-mod handlers;
-mod types;
-
-use axum::routing::{get, post};
 use dotenvy::dotenv;
-use sqlx::PgPool;
+use invoice_payment_system::{AppState, create_app, db};
 use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub db: PgPool,
-}
 
 #[tokio::main]
 async fn main() {
@@ -34,23 +22,7 @@ async fn main() {
         .expect("Failed to initialize database pool");
 
     let state = AppState { db: pool };
-
-    let public_routes = axum::Router::new()
-        .route("/business", post(handlers::create_business))
-        .route("/invoices/{id}/pay", post(handlers::pay_invoice));
-
-    let protected = axum::Router::new()
-        .route("/customer", post(handlers::create_customer))
-        .route("/customers", get(handlers::fetch_all_customers))
-        .route("/customers/{id}", get(handlers::get_customer))
-        .route("/invoice", post(handlers::create_invoice))
-        .route("/invoices", get(handlers::list_invoices))
-        .route("/invoice/{id}", get(handlers::get_invoice));
-
-    let app = axum::Router::new()
-        .merge(public_routes)
-        .merge(protected)
-        .with_state(state);
+    let app = create_app(state);
 
     let address = "0.0.0.0:8080";
     let listener = tokio::net::TcpListener::bind(address)

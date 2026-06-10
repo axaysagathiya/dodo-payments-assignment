@@ -80,11 +80,6 @@ pub async fn pay_invoice(
         AppError::not_found("Invoice not found")
     })?;
 
-    if invoice.state == InvoiceState::Paid {
-        warn!("Payment attempted for already paid invoice {}", invoice_id);
-        return Err(AppError::bad_request("Invoice is already paid"));
-    }
-
     // 3. Check for ANY active or recent processing attempts on this invoice
     let active_attempts = sqlx::query!(
         r#"
@@ -171,9 +166,6 @@ pub async fn pay_invoice(
                 })?;
             }
         }
-
-        // For failed or unknown attempts,
-        // we allow retries with same idempotency key, but if payload differs we reject
     }
 
     // 4. Upsert the current attempt as "processing"
@@ -198,14 +190,7 @@ pub async fn pay_invoice(
         AppError::database("Failed to prepare payment attempt").with_details(e.to_string())
     })?;
 
-    tx.commit().await.map_err(|e| {
-        error!(
-            "Failed to commit lock transaction for invoice {}: {}",
-            invoice_id, e
-        );
-        AppError::database("Failed to commit transaction").with_details(e.to_string())
-    })?;
-
+    // Row lock on 'invoices' is HELD during the PSP call.
     info!(
         "Requesting charge from PSP for invoice {} (amount: {})",
         invoice_id, invoice.total_amount_cents
@@ -216,7 +201,13 @@ pub async fn pay_invoice(
         std::env::var("MOCK_PSP_BASE_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
     let psp_charge_url = format!("{}/charge", psp_base_url.trim_end_matches('/'));
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| {
+            AppError::internal_error("Failed to build HTTP client").with_details(e.to_string())
+        })?;
+
     let psp_res = client
         .post(&psp_charge_url)
         .json(&PspChargeRequest {
@@ -312,7 +303,7 @@ pub async fn pay_invoice(
         }
     };
 
-    // 7. Final Update
+    // 7. Final Update (Inside same transaction)
     let updated_record = sqlx::query!(
         r#"
         UPDATE payment_attempts
@@ -326,7 +317,7 @@ pub async fn pay_invoice(
         invoice_id,
         payload.idempotency_key
     )
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| {
         error!(
@@ -343,11 +334,19 @@ pub async fn pay_invoice(
             InvoiceState::Paid as InvoiceState,
             invoice_id
         )
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(|e| {
             error!("Failed to mark invoice {} as paid: {}", invoice_id, e);
             AppError::database("Failed to finalize invoice").with_details(e.to_string())
+        })?;
+
+        tx.commit().await.map_err(|e| {
+            error!(
+                "Failed to commit transaction for invoice {}: {}",
+                invoice_id, e
+            );
+            AppError::database("Failed to commit final transaction").with_details(e.to_string())
         })?;
 
         Ok(Json(PaymentResponse {
@@ -357,6 +356,14 @@ pub async fn pay_invoice(
             failure_code: None,
         }))
     } else {
+        tx.commit().await.map_err(|e| {
+            error!(
+                "Failed to commit failure state for invoice {}: {}",
+                invoice_id, e
+            );
+            AppError::database("Failed to commit failure transaction").with_details(e.to_string())
+        })?;
+
         let code = match final_status {
             PaymentStatus::Processing => "PAYMENT_PROCESSING",
             PaymentStatus::Unknown => "PAYMENT_STATUS_UNKNOWN",
